@@ -1,15 +1,8 @@
-import numpy as np
-from tqdm import tqdm
-
 import torch
 from torch import nn
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from .configuration import ReadoutConfig
-from .model_utils import get_null_adj_nll, print_num_params
-import sys; sys.path.append('..')
-from utils.generic_utils import to_np
+from .model_utils import print_num_params
 
 
 class Readout(nn.Module):

@@ -1,15 +1,12 @@
 import os
 import h5py
-import joblib
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from numpy.linalg import norm
 from os.path import join as pjoin
 
-import torch
 from torch.utils.data import Dataset, DataLoader
-
 from .configuration import ReadoutConfig, TrainConfig
 
 
@@ -144,18 +141,22 @@ def load_readout_data(config: ReadoutConfig):
         repeats_grp = grp['repeats']
         spks_r = np.array(repeats_grp['spksR'], dtype=float)
         spks_r = spks_r[:, config.useful_cells[config.expt]]
-        psth = np.array(repeats_grp['psth_raw_all'], dtype=float)
-        psth = psth[config.useful_cells[config.expt]]
-        start_inds = np.array(repeats_grp['tind_start_all'], dtype=int)
-        start_inds = start_inds[config.useful_cells[config.expt]]
         stim_r = np.array(repeats_grp['stimR'], dtype=float)
         stim_r = np.transpose(stim_r, (3, 1, 2, 0))  # 2 x grd x grd x nt
+        psth = np.array(repeats_grp['psth_raw_all'], dtype=float)
+        start_inds = np.array(repeats_grp['tind_start_all'], dtype=int)
 
         badspks_r = np.array(repeats_grp['badspksR'], dtype=int)
         goodspks_r = 1 - badspks_r
         good_indxs_r = np.where(goodspks_r == 1)[0]
         true_good_indxs_r = refine_good_indices(stim_r, good_indxs_r, config.time_lags)
         true_good_indxs_r = true_good_indxs_r - config.time_lags  # the whole thing is shifted
+
+        if spks_r.shape[-1] == 1:
+            psth = np.expand_dims(psth, axis=0)
+            psth = psth[config.useful_cells[config.expt]]
+            start_inds = np.expand_dims(start_inds, axis=0)
+            start_inds = start_inds[config.useful_cells[config.expt]]
 
         extras_r = {
             'psth': psth.astype(int),

@@ -3,6 +3,7 @@ import numpy as np
 from tqdm.notebook import tqdm
 from typing import Union, Tuple
 from os.path import join as pjoin
+from prettytable import PrettyTable
 from sklearn.metrics import r2_score
 
 import torch
@@ -184,6 +185,7 @@ class ReadoutTrainer(BaseTrainer):
 
         nnll = get_null_adj_nll(pred, true)
         r2 = r2_score(true, pred, multioutput='raw_values') * 100
+        r2 = np.maximum(r2, 0.0)
 
         if global_step is not None:
             self.writer.add_scalar("loss/valid", loss, global_step)
@@ -234,6 +236,8 @@ class ReadoutTrainer(BaseTrainer):
                 )
 
         r2 = r2_score(psth.mean(1).T, pred_stacked.mean(1).T, multioutput='raw_values') * 100
+        r2 = np.maximum(r2, 0.0)
+        r2 = np.round(r2, decimals=2)
 
         if global_step is not None:
             self.writer.add_scalar("loss/test", loss, global_step)
@@ -242,15 +246,24 @@ class ReadoutTrainer(BaseTrainer):
             self.writer.add_scalar("mean/r2/test", np.mean(r2), global_step)
             self.writer.add_scalar("median/r2/test", np.median(r2), global_step)
         if verbose:
-            msg = "test,  num trials {:d},   loss: {:.3f},\n\n"
-            msg += "nnll over trials:\nmean:\n{},\nvar:\n{}\n\n"
-            msg += "\nnnll mean: {:.4f},   nnll median: {:.4f}\n\n"
-            msg += "r2:\n{},\n\nr2 mean: {:.2f} {:s},   r2 median: {:.2f} {:s}\n\n"
-            msg = msg.format(ntrials, loss,
-                             nnll_stacked.mean(-1), nnll_stacked.var(-1),
-                             np.mean(nnll_stacked), np.median(nnll_stacked),
-                             r2, np.mean(r2), '%', np.median(r2), '%')
+            msg = "{},  num trials {:d},   test loss: {:.3f},\n\n"
+            msg += "nnll mean: {:.4f},   nnll median: {:.4f}\n\n"
+            msg += "r2 mean: {:.2f} {:s},   r2 median: {:.2f} {:s}\n\n"
+            msg = msg.format(
+                self.config.expt, ntrials, loss,
+                np.mean(nnll_stacked), np.median(nnll_stacked),
+                np.mean(r2), '%', np.median(r2), '%',
+            )
             print(msg)
+
+            x = PrettyTable()
+            x.field_names = ["cell idx", "r2 (avg over trials)", "nnll (mean ± std over trials)"]
+            for cc in range(nc):
+                x.add_row(
+                    [cc, "{:.1f} {:s}".format(r2[cc], '%'),
+                     "{:.3f} ± {:.3f}".format(nnll_stacked[cc].mean(), nnll_stacked[cc].std())]
+                )
+            print(x)
 
         output = {
             'true': true_stacked,

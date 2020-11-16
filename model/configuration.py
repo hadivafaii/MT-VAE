@@ -177,7 +177,7 @@ class TrainConfig:
 
                  scheduler_type: str = 'cosine',
                  scheduler_gamma: float = 0.9,
-                 scheduler_period: int = 100,
+                 scheduler_period: int = 10,
                  eta_min: float = 1e-8,
 
                  beta_warmup_steps: int = None,
@@ -194,7 +194,7 @@ class TrainConfig:
         self.batch_size = batch_size
         self.weight_decay = weight_decay
 
-        _allowed_schedulers = ['cosine', 'exponential', None]
+        _allowed_schedulers = ['cosine', 'exponential', 'step', None]
         assert scheduler_type in _allowed_schedulers,\
             "allowed scheduler types: {}".format(_allowed_schedulers)
         self.scheduler_type = scheduler_type
