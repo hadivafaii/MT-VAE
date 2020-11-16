@@ -21,11 +21,17 @@ def normalize_fn(x, dim=None):
 
 
 class ReadoutDataset(Dataset):
-    def __init__(self, stim, spks, idxs, transform=None):
+    def __init__(self,
+                 stim: np.ndarray,
+                 spks: np.ndarray,
+                 idxs: np.ndarray,
+                 extras: dict = None,
+                 transform=None,):
         assert len(stim) == len(spks) == len(idxs), "input/output num samples must be equal"
         self.stim = stim
         self.spks = spks
         self._idxs = idxs
+        self.extras = {} if extras is None else extras
         self.transform = transform
 
     def __len__(self):
@@ -41,22 +47,45 @@ class ReadoutDataset(Dataset):
         return src, tgt
 
 
+# TODO: capture errors whenever output_r is empty (no repeat data)
+# Then dl_test should be an empty dataset
 def create_readout_dataset(config: ReadoutConfig, train_config: TrainConfig):
-    stim, spks, good_indxs = load_readout_data(config)
+    output, output_r = load_readout_data(config)
+    stim, spks, good_indxs, extras = output
+    stim_r, spks_r, extras_r = output_r
+    good_indxs_tst = np.arange(config.time_lags, len(spks_r))
+
     nt = len(good_indxs)
     train_inds, valid_inds = generate_xv_folds(nt, num_folds=train_config.xv_folds)
 
     rng = np.random.RandomState(train_config.random_state)
     rng.shuffle(train_inds)
 
-    good_idxs_trn = good_indxs[train_inds]
-    good_idxs_vld = good_indxs[valid_inds]
+    good_indxs_trn = good_indxs[train_inds]
+    good_indxs_vld = good_indxs[valid_inds]
 
-    stim_trn, spks_trn = _process_readout_data(good_idxs_trn, stim, spks, config.time_lags)
-    stim_vld, spks_vld = _process_readout_data(good_idxs_vld, stim, spks, config.time_lags)
+    stim_trn, spks_trn = process_readout_data(good_indxs_trn, stim, spks, config.time_lags)
+    stim_vld, spks_vld = process_readout_data(good_indxs_vld, stim, spks, config.time_lags)
+    stim_tst, spks_tst = process_readout_data(good_indxs_tst, stim_r, spks_r, config.time_lags)
 
-    ds_train = ReadoutDataset(stim_trn, spks_trn, good_idxs_trn, normalize_fn)
-    ds_valid = ReadoutDataset(stim_vld, spks_vld, good_idxs_vld, normalize_fn)
+    ds_train = ReadoutDataset(
+        stim=stim_trn,
+        spks=spks_trn,
+        idxs=good_indxs_trn,
+        extras=extras,
+        transform=normalize_fn,)
+    ds_valid = ReadoutDataset(
+        stim=stim_vld,
+        spks=spks_vld,
+        idxs=good_indxs_vld,
+        extras=extras,
+        transform=normalize_fn,)
+    ds_test = ReadoutDataset(
+        stim=stim_tst,
+        spks=spks_tst,
+        idxs=good_indxs_tst,
+        extras=extras_r,
+        transform=normalize_fn,)
 
     dl_train = DataLoader(
         dataset=ds_train,
@@ -68,11 +97,16 @@ def create_readout_dataset(config: ReadoutConfig, train_config: TrainConfig):
         batch_size=train_config.batch_size,
         shuffle=False,
         drop_last=False,)
+    dl_test = DataLoader(
+        dataset=ds_test,
+        batch_size=train_config.batch_size,
+        shuffle=False,
+        drop_last=False,)
 
-    return dl_train, dl_valid
+    return dl_train, dl_valid, dl_test
 
 
-def _process_readout_data(idxs, stim, spks, time_lags):
+def process_readout_data(idxs, stim, spks, time_lags):
     src = []
     for i in idxs:
         src.append(np.expand_dims(stim[..., i - time_lags: i], axis=0))
@@ -98,14 +132,47 @@ def load_readout_data(config: ReadoutConfig):
     good_indxs = good_indxs[good_indxs > config.time_lags]
     true_good_indxs = refine_good_indices(stim, good_indxs, config.time_lags)
 
-    f.close()
-
+    extras = {}     # TODO: later might wanna add lfp
     output = (
         stim.astype(float),
         spks.astype(float),
         true_good_indxs.astype(int),
+        extras,
     )
-    return output
+
+    if 'repeats' in grp:
+        repeats_grp = grp['repeats']
+        spks_r = np.array(repeats_grp['spksR'], dtype=float)
+        spks_r = spks_r[:, config.useful_cells[config.expt]]
+        psth = np.array(repeats_grp['psth_raw_all'], dtype=float)
+        psth = psth[config.useful_cells[config.expt]]
+        start_inds = np.array(repeats_grp['tind_start_all'], dtype=int)
+        start_inds = start_inds[config.useful_cells[config.expt]]
+        stim_r = np.array(repeats_grp['stimR'], dtype=float)
+        stim_r = np.transpose(stim_r, (3, 1, 2, 0))  # 2 x grd x grd x nt
+
+        badspks_r = np.array(repeats_grp['badspksR'], dtype=int)
+        goodspks_r = 1 - badspks_r
+        good_indxs_r = np.where(goodspks_r == 1)[0]
+        true_good_indxs_r = refine_good_indices(stim_r, good_indxs_r, config.time_lags)
+        true_good_indxs_r = true_good_indxs_r - config.time_lags  # the whole thing is shifted
+
+        extras_r = {
+            'psth': psth.astype(int),
+            'start_inds': start_inds.astype(int),
+            'good_indxs_r': true_good_indxs_r.astype(int),
+        }
+        output_r = (
+            stim_r.astype(float),
+            spks_r.astype(float),
+            extras_r,
+        )
+    else:
+        output_r = ()
+
+    f.close()
+
+    return output, output_r
 
 
 def refine_good_indices(stim, good_indxs, time_lags):
@@ -122,6 +189,7 @@ def refine_good_indices(stim, good_indxs, time_lags):
     return np.array(true_good_indxs)
 
 
+"""
 class UnSupervisedDataset(Dataset):
     def __init__(self, data_dict, time_lags, time_gals, transform=None):
 
@@ -155,7 +223,6 @@ class UnSupervisedDataset(Dataset):
 
         return source, target
 
-"""
 def create_datasets(config, xv_folds, rng, load_unsupervised=False, load_processed=True):
     _dir = pjoin(config.base_dir, "pytorch_processed")
     files = os.listdir(_dir)
