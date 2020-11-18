@@ -1,19 +1,64 @@
 import torch
 from torch import nn
+from torch.nn.utils import weight_norm
 
+from .common import get_init_fn, Permute
 from .configuration import ReadoutConfig
 from .model_utils import print_num_params
 
 
 class Readout(nn.Module):
-    def __init__(self,
-                 config: ReadoutConfig,
-                 verbose=False,):
+    def __init__(self, config: ReadoutConfig, verbose=False):
         super(Readout, self).__init__()
 
         self.config = config
 
-        self.temporal_fcs = nn.ModuleList([
+        _spat_dims = [15, 8, 4]
+        spatiotemporal = [
+            nn.Sequential(
+                nn.Dropout3d(p=config.dropout, inplace=True),
+                nn.Linear(in_features=config.time_lags // 2**i,
+                          out_features=config.nb_tk[i], bias=False,),
+                Permute(dims=(0, 1, -1, 2, 3)),
+                nn.Flatten(start_dim=3),
+                weight_norm(nn.Linear(
+                    in_features=_spat_dims[i] ** 2,
+                    out_features=config.nb_sk[i], bias=False,)),
+                nn.Flatten(),)
+            for i in config.include_lvls
+        ]
+        self.spatiotemporal = nn.ModuleList(spatiotemporal)
+
+        # total filters to pool from
+        nb_filters = sum(config.nb_tk[i] * config.nb_sk[i] * config.core_dim * 2**i for i in config.include_lvls)
+
+        self.layer = nn.Linear(nb_filters, len(config.useful_cells[config.expt]), bias=True)
+        self.relu = nn.ReLU(inplace=True)
+        self.softplus = nn.Softplus()
+        self.criterion = nn.PoissonNLLLoss(log_input=False, reduction="sum")
+
+        self.apply(get_init_fn(config.init_range))
+        if verbose:
+            print_num_params(self)
+
+    def forward(self, *args):
+        x = (self.spatiotemporal[i](args[lvl]) for i, lvl in enumerate(self.config.include_lvls))
+        x = torch.cat(list(x), dim=-1)
+        x = self.relu(x)
+        x = self.layer(x)
+        x = self.softplus(x)
+        return x
+
+
+class SingleCellReadout(nn.Module):
+    def __init__(self, config: ReadoutConfig, verbose=False):
+        super(SingleCellReadout, self).__init__()
+
+        self.config = config
+        self.nc = len(config.useful_cells[config.expt])
+
+        # spatio-temporal filters
+        self.temporal = nn.ModuleList([
             nn.Linear(
                 in_features=config.time_lags // 2**i,
                 out_features=config.nb_tk[i],
@@ -21,38 +66,40 @@ class Readout(nn.Module):
             for i in config.include_lvls
         ])
         _spat_dims = [15, 8, 4]
-        self.spatial_fcs = nn.ModuleList([
+        self.spatial = nn.ModuleList([
             nn.Linear(
                 in_features=_spat_dims[i]**2,
-                out_features=config.nb_sk[i],
+                out_features=config.nb_sk[i] * self.nc,
                 bias=False,)
             for i in config.include_lvls
         ])
 
-        nb_filters = 0
-        for i in config.include_lvls:
-            nb_filters += config.nb_tk[i] * config.nb_sk[i] * config.core_dim * 2**i
-        self.layer = nn.Linear(nb_filters, len(config.useful_cells[config.expt]), bias=True)
-        # self.norm = nn.LayerNorm(nb_filters)
-        self.relu = nn.ReLU(inplace=True)
-        self.softplus = nn.Softplus()
-        self.dropout = nn.Dropout(config.dropout)
+        # last layer
+        nb_filters = sum(config.nb_tk[i] * config.nb_sk[i] * config.core_dim * 2**i for i in config.include_lvls)
+        self.layers = nn.ModuleDict(
+            {"{:d}".format(c): nn.Sequential(
+                nn.ReLU(inplace=True),
+                nn.Dropout(config.dropout),
+                nn.Linear(in_features=nb_filters,
+                          out_features=1, bias=True,),
+                nn.Softplus(),)
+                for c in range(self.nc)}
+        )
         self.criterion = nn.PoissonNLLLoss(log_input=False, reduction="sum")
 
         if verbose:
             print_num_params(self)
 
     def forward(self, *args):
-        assert len(args) == len(self.config.include_lvls)
-        x = (self.temporal_fcs[i](item).permute(0, 1, -1, 2) for i, item in enumerate(args))
-        z = (self.spatial_fcs[i](item).flatten(start_dim=1) for i, item in enumerate(x))
-
-        z = torch.cat(list(z), dim=-1)
-        z = self.relu(z)
-        z = self.dropout(z)
-        # z = self.norm(z)
-
-        y = self.layer(z)
-        y = self.softplus(y)
-
+        outputs = []
+        for nb_sk, tk, sk, x in zip(self.config.nb_sk, self.temporal, self.spatial, args):
+            output = tk(x).permute(0, 1, 3, 2)
+            output = sk(output)
+            output = output.split(nb_sk, dim=-1)
+            output = tuple(item.flatten(start_dim=1) for item in output)
+            outputs.append(output)
+        outputs = tuple(torch.cat([item[c] for item in outputs], dim=-1) for c in range(self.nc))
+        outputs = tuple(layer(features) for features, layer in zip(outputs, self.layers.values()))
+        y = torch.cat(outputs, dim=-1)
         return y
+

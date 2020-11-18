@@ -5,7 +5,7 @@ import pandas as pd
 from os.path import join as pjoin
 from typing import List, Union, Dict
 
-NORM_CHOICES = ['batch', 'layer']
+NORM_CHOICES = ['batch', 'layer', 'group']
 CONV_NORM_CHOICES = ['weight', 'spectral']
 
 
@@ -79,6 +79,50 @@ class Config:
             self.useful_cells = useful_cells
 
 
+class TrainConfig:
+    def __init__(self,
+                 lr: float = 1e-2,
+                 batch_size: int = 64,
+                 weight_decay: float = 1e-1,
+
+                 scheduler_type: str = 'cosine',
+                 scheduler_gamma: float = 0.9,
+                 scheduler_period: int = 10,
+                 lr_min: float = 1e-8,
+
+                 beta_warmup_steps: int = None,
+
+                 log_freq: int = 100,
+                 chkpt_freq: int = 1,
+                 eval_freq: int = 5,
+                 random_state: int = 42,
+                 xv_folds: int = 5,
+                 use_cuda: bool = True,
+                 runs_dir: str = 'Documents/MT/runs',):
+
+        self.lr = lr
+        self.batch_size = batch_size
+        self.weight_decay = weight_decay
+
+        _allowed_schedulers = ['cosine', 'exponential', 'step', 'cyclic', None]
+        assert scheduler_type in _allowed_schedulers,\
+            "allowed scheduler types: {}".format(_allowed_schedulers)
+        self.scheduler_type = scheduler_type
+        self.scheduler_gamma = scheduler_gamma
+        self.scheduler_period = scheduler_period
+        self.lr_min = lr_min
+
+        self.beta_warmup_steps = beta_warmup_steps
+
+        self.log_freq = log_freq
+        self.chkpt_freq = chkpt_freq
+        self.eval_freq = eval_freq
+        self.random_state = random_state
+        self.xv_folds = xv_folds
+        self.use_cuda = use_cuda
+        self.runs_dir = pjoin(os.environ['HOME'], runs_dir)
+
+
 class VAEConfig:
     def __init__(
         self,
@@ -126,35 +170,19 @@ class VAEConfig:
             self.h_file = h_file
 
 
-class ReadoutConfig:
-    def __init__(
-        self,
-            expt: str,
-            norm: str = 'layer',
-            time_lags: int = 12,
-            core_dim: int = 64,
-            dropout: float = 0.0,
-            include_lvls: List[int] = None,
-            nb_sk: List[int] = None,
-            nb_tk: List[int] = None,
-
-            useful_cells: Dict[str, list] = None,
-            base_dir: str = 'Documents/MT',
-            temporal_res: int = 25,
-            grid_size: int = 15,
-            h_file: str = None,
-    ):
-        # readout config
-        self.expt = expt
-        self.norm = norm if norm in NORM_CHOICES else None
+class BaseConfig(object):
+    def __init__(self,
+                 time_lags: int = 12,
+                 init_range: float = 0.05,
+                 base_dir: str = 'Documents/MT',
+                 temporal_res: int = 25,
+                 grid_size: int = 15,
+                 h_file: str = None,
+                 useful_cells: Dict[str, list] = None,
+                 ):
 
         self.time_lags = time_lags
-        self.core_dim = core_dim
-        self.dropout = dropout
-        self.include_lvls = [0, 1, 2] if include_lvls is None else include_lvls
-        self.nb_sk = [16, 8, 4] if nb_sk is None else nb_sk
-        self.nb_tk = [2, 2, 1] if nb_tk is None else nb_tk
-        assert len(self.include_lvls) == len(self.nb_sk) == len(self.nb_tk)
+        self.init_range = init_range
 
         # dir configs
         self.base_dir = pjoin(os.environ['HOME'], base_dir)
@@ -166,79 +194,67 @@ class ReadoutConfig:
             self.h_file = h_file
 
         # useful cells
-        self.useful_cells = load_cellinfo(self.base_dir) if useful_cells is None else useful_cells
+        self.useful_cells = self.load_cellinfo() if useful_cells is None else useful_cells
+
+    def load_cellinfo(self):
+        clu = pd.read_csv(pjoin(self.base_dir, "extra_info", "cellinfo.csv"))
+        ytu = pd.read_csv(pjoin(self.base_dir, "extra_info", "cellinfo_ytu.csv"))
+
+        clu = clu[np.logical_and(1 - clu.SingleElectrode, clu.HyperFlow)]
+        ytu = ytu[np.logical_and(1 - ytu.SingleElectrode, ytu.HyperFlow)]
+
+        useful_cells = {}
+
+        for name in clu.CellName:
+            useful_channels = []
+            for i in range(1, 16 + 1):
+                if clu[clu.CellName == name]["chan{:d}".format(i)].item():
+                    useful_channels.append(i - 1)
+
+            if len(useful_channels) > 1:
+                useful_cells.update({name: useful_channels})
+
+        for name in ytu.CellName:
+            useful_channels = []
+            for i in range(1, 24 + 1):
+                if ytu[ytu.CellName == name]["chan{:d}".format(i)].item():
+                    useful_channels.append(i - 1)
+
+            if len(useful_channels) > 1:
+                useful_cells.update({name: useful_channels})
+
+        return useful_cells
 
 
-class TrainConfig:
+class ReadoutConfig(BaseConfig):
     def __init__(self,
-                 lr: float = 1e-2,
-                 batch_size: int = 64,
-                 weight_decay: float = 1e-1,
+                 expt: str,
+                 core_dim: int = 64,
+                 dropout: float = 0.0,
+                 include_lvls: List[int] = None,
+                 nb_sk: List[int] = None,
+                 nb_tk: List[int] = None,
+                 **kwargs,
+                 ):
+        super(ReadoutConfig, self).__init__(**kwargs)
 
-                 scheduler_type: str = 'cosine',
-                 scheduler_gamma: float = 0.9,
-                 scheduler_period: int = 10,
-                 eta_min: float = 1e-8,
-
-                 beta_warmup_steps: int = None,
-
-                 log_freq: int = 100,
-                 chkpt_freq: int = 1,
-                 eval_freq: int = 5,
-                 random_state: int = 42,
-                 xv_folds: int = 5,
-                 use_cuda: bool = True,
-                 runs_dir: str = 'Documents/MT/runs',):
-
-        self.lr = lr
-        self.batch_size = batch_size
-        self.weight_decay = weight_decay
-
-        _allowed_schedulers = ['cosine', 'exponential', 'step', None]
-        assert scheduler_type in _allowed_schedulers,\
-            "allowed scheduler types: {}".format(_allowed_schedulers)
-        self.scheduler_type = scheduler_type
-        self.scheduler_gamma = scheduler_gamma
-        self.scheduler_period = scheduler_period
-        self.eta_min = eta_min
-
-        self.beta_warmup_steps = beta_warmup_steps
-
-        self.log_freq = log_freq
-        self.chkpt_freq = chkpt_freq
-        self.eval_freq = eval_freq
-        self.random_state = random_state
-        self.xv_folds = xv_folds
-        self.use_cuda = use_cuda
-        self.runs_dir = pjoin(os.environ['HOME'], runs_dir)
+        self.expt = expt
+        self.core_dim = core_dim
+        self.dropout = dropout
+        self.include_lvls = [0, 1, 2] if include_lvls is None else include_lvls
+        self.nb_sk = [16, 8, 4] if nb_sk is None else nb_sk
+        self.nb_tk = [2, 2, 1] if nb_tk is None else nb_tk
+        assert len(self.include_lvls) == len(self.nb_sk) == len(self.nb_tk)
 
 
-def load_cellinfo(base_dir):
-    clu = pd.read_csv(pjoin(base_dir, "extra_info", "cellinfo.csv"))
-    ytu = pd.read_csv(pjoin(base_dir, "extra_info", "cellinfo_ytu.csv"))
+class FFConfig(BaseConfig):
+    def __init__(self,
+                 expt: str,
+                 time_lags: int = 12,
+                 **kwargs,
+                 ):
+        super(FFConfig, self).__init__(**kwargs)
 
-    clu = clu[np.logical_and(1 - clu.SingleElectrode, clu.HyperFlow)]
-    ytu = ytu[np.logical_and(1 - ytu.SingleElectrode, ytu.HyperFlow)]
-
-    useful_cells = {}
-
-    for name in clu.CellName:
-        useful_channels = []
-        for i in range(1, 16 + 1):
-            if clu[clu.CellName == name]["chan{:d}".format(i)].item():
-                useful_channels.append(i - 1)
-
-        if len(useful_channels) > 1:
-            useful_cells.update({name: useful_channels})
-
-    for name in ytu.CellName:
-        useful_channels = []
-        for i in range(1, 24 + 1):
-            if ytu[ytu.CellName == name]["chan{:d}".format(i)].item():
-                useful_channels.append(i - 1)
-
-        if len(useful_channels) > 1:
-            useful_cells.update({name: useful_channels})
-
-    return useful_cells
-
+        # readout config
+        self.expt = expt
+        self.time_lags = time_lags

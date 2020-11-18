@@ -5,7 +5,7 @@ from sklearn.metrics import mutual_info_score
 
 def get_cm(config, train_config, mode='readout'):
     if mode == 'readout':
-        cm1 = '{}_drp:{}_sk:{}_wd:{}_lr:{}_'
+        cm1 = '{}_drp:{}_sk:{}_wd:{}_lr:{:1.0e}_'
         cm1 = cm1.format(config.expt, config.dropout, config.nb_sk,
                          train_config.weight_decay, train_config.lr,)
         if train_config.scheduler_type == 'cosine':
@@ -17,6 +17,9 @@ def get_cm(config, train_config, mode='readout'):
         elif train_config.scheduler_type == 'step':
             cm2 = 'gamma:{}_T:{}'
             cm2 = cm2.format(train_config.scheduler_gamma, train_config.scheduler_period)
+        elif train_config.scheduler_type == 'cyclic':
+            cm2 = 'lr_min:{:1.0e}_gamma:{}_T:{}'
+            cm2 = cm2.format(train_config.lr_min, train_config.scheduler_gamma, train_config.scheduler_period)
         else:
             cm2 = ''
 

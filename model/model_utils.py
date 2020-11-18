@@ -174,7 +174,7 @@ def load_model2(keyword, chkpt_id=-1, config=None, verbose=False, base_dir='Docu
         from .vae import VAE
         loaded_model = VAE(config, verbose=verbose)
     elif type(config).__name__ == 'ReadoutConfig':
-        from .readout import Readout
+        from .readout import Readout, SingleCellReadout  # TODO: is single cell readout worth it?
         loaded_model = Readout(config, verbose=verbose)
     elif type(config).__name__ == 'Config':  # TODO: depriciated, delete later
         from .vae import VAE
@@ -207,15 +207,27 @@ def print_num_params(module: nn.Module):
     print(t, '\n\n')
 
 
-def get_null_adj_nll(pred, true):
-    nll = _get_nll(pred, true)
+def r2_score(pred: np.ndarray, true: np.ndarray, axis: int = 0, clean: bool = True):
+    r2 = 1 - np.var(true, axis=axis) / np.linalg.norm(pred-true, axis=axis)
+    if clean:
+        r2 = np.maximum(0.0, r2 * 100)
+    return r2
 
-    r_0 = true.mean(0)
-    null_nll = _get_nll(r_0, true)
+
+def get_null_adj_nll(pred: np.ndarray, true: np.ndarray, axis: int = 0):
+    if not isinstance(pred, np.ndarray):
+        pred = np.array(pred)
+    if not isinstance(true, np.ndarray):
+        true = np.array(true)
+
+    nll = _get_nll(pred, true, axis)
+
+    r_0 = true.mean(axis)
+    null_nll = _get_nll(r_0, true, axis)
 
     return -nll + null_nll
 
 
-def _get_nll(pred, true):
+def _get_nll(pred, true, axis):
     _eps = np.finfo(np.float32).eps
-    return np.sum(pred - true * np.log(pred + _eps), axis=0) / np.maximum(_eps, np.sum(true, axis=0))
+    return np.sum(pred - true * np.log(pred + _eps), axis=axis) / np.maximum(_eps, np.sum(true, axis=axis))

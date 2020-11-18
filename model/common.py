@@ -4,18 +4,31 @@ from torch.nn.utils import spectral_norm, weight_norm
 from typing import Tuple, Union
 
 
-def add_sn(m):
+def add_sn(m: nn.Module):
     if isinstance(m, (nn.Conv3d, nn.ConvTranspose3d)):
         return spectral_norm(m)
     else:
         return m
 
 
-def add_wn(m):
-    if isinstance(m, (nn.Conv3d, nn.ConvTranspose3d)):
+def add_wn(m: nn.Module):
+    if isinstance(m, (nn.Conv3d, nn.ConvTranspose3d, nn.Linear)):
         return weight_norm(m)
     else:
         return m
+
+
+def get_init_fn(init_range: float):
+    def init_weights(m: nn.Module):
+        if isinstance(m, (nn.Conv3d, nn.ConvTranspose3d)):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+        elif isinstance(m, nn.Linear):
+            nn.init.normal_(m.weight, mean=0.0, std=init_range)
+        elif isinstance(m, (nn.BatchNorm3d, nn.LayerNorm, nn.GroupNorm)):
+            nn.init.constant_(m.weight, val=1.0)
+        if hasattr(m, 'bias') and m.bias is not None:
+            nn.init.constant_(m.bias, val=0.0)
+    return init_weights
 
 
 def get_norm(norm: str):
@@ -54,6 +67,15 @@ class SELayer(nn.Module):
         y = self.avg_pool(x).view(b, c)
         y = self.fc(y).view(b, c, 1, 1, 1)
         return x * y.expand_as(x)
+
+
+class Permute(nn.Module):
+    def __init__(self, dims: Tuple[int, ...] = None):
+        super().__init__()
+        self.dims = dims
+
+    def forward(self, x):
+        return x.permute(*self.dims)
 
 
 class Swish(nn.Module):

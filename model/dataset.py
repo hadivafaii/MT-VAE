@@ -154,9 +154,9 @@ def load_readout_data(config: ReadoutConfig):
 
         if spks_r.shape[-1] == 1:
             psth = np.expand_dims(psth, axis=0)
-            psth = psth[config.useful_cells[config.expt]]
             start_inds = np.expand_dims(start_inds, axis=0)
-            start_inds = start_inds[config.useful_cells[config.expt]]
+        psth = psth[config.useful_cells[config.expt]]
+        start_inds = start_inds[config.useful_cells[config.expt]]
 
         extras_r = {
             'psth': psth.astype(int),
