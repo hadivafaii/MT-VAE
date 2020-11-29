@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.optim import AdamW, SGD
 from torch.optim.lr_scheduler import CosineAnnealingLR, ExponentialLR, StepLR, CyclicLR
 
-from .vae import VAE, Encoder
+from .vae import VAE
 from .readout import Readout
 from .configuration import TrainConfig
 from .dataset import create_readout_dataset
@@ -111,6 +111,7 @@ class BaseTrainer(object):
             filter(lambda p: p.requires_grad, self.model.parameters()),
             lr=self.train_config.lr,
             weight_decay=self.train_config.weight_decay,
+            betas=(self.train_config.beta1, self.train_config.beta2),
         )
         if self.train_config.scheduler_type == 'cosine':
             self.optim_schedule = CosineAnnealingLR(
@@ -165,10 +166,10 @@ class ReadoutTrainer(BaseTrainer):
     def __init__(self,
                  model: Readout,
                  train_config: TrainConfig,
-                 core: Encoder,
+                 vae: VAE,
                  **kwargs,):
         super(ReadoutTrainer, self).__init__(model, train_config, **kwargs)
-        self.core = core.to(self.device).eval()
+        self.vae = vae.to(self.device).eval()
 
     def iteration(self, epoch: int = 0):
         self.model.train()
@@ -181,7 +182,7 @@ class ReadoutTrainer(BaseTrainer):
 
             x, y = self.to_cuda((x, y))
             with torch.no_grad():
-                x1, x2, x3, _ = self.core(x)[0]
+                x1, x2, x3, _ = self.vae.encoder(x)[0]
 
             pred = self.model(x1, x2, x3)
             loss = self.model.criterion(pred, y) / self.dl_train.batch_size
@@ -198,7 +199,7 @@ class ReadoutTrainer(BaseTrainer):
         return cuml_loss / nb_iters
 
     def validate(self, global_step: int = None, verbose: bool = True):
-        loss, pred, true = self.generate_prediction('valid')
+        loss, pred, true = self.generate_prediction(mode='valid', compute_latents=False)
 
         nnll = get_null_adj_nll(pred, true)
         r2 = r2_score(true, pred, multioutput='raw_values') * 100
@@ -226,7 +227,7 @@ class ReadoutTrainer(BaseTrainer):
         return output
 
     def test(self, global_step: int = None, verbose: bool = True):
-        loss, pred, true = self.generate_prediction('test')
+        loss, pred, true = self.generate_prediction(mode='test', compute_latents=False)
 
         psth = self.dl_test.dataset.extras['psth']
         start_inds = self.dl_test.dataset.extras['start_inds']
@@ -294,7 +295,9 @@ class ReadoutTrainer(BaseTrainer):
         }
         return output
 
-    def generate_prediction(self, mode):
+    def generate_prediction(self, mode: str, compute_latents: bool = True):
+        self.model.eval()
+
         if mode == 'train':
             loader = self.dl_train
         elif mode == 'valid':
@@ -304,15 +307,19 @@ class ReadoutTrainer(BaseTrainer):
         else:
             raise ValueError("invalid mode: {}".format(mode))
 
-        self.model.eval()
-
         loss_list = []
-        pred_list = []
-        true_list = []
+        pred_list, true_list = [], []
+        z1_list, z2_list = [], []
         for (x, y) in loader:
             x, y = self.to_cuda((x, y))
             with torch.no_grad():
-                x1, x2, x3, _ = self.core(x)[0]
+                if compute_latents:
+                    x1, x2, x3, z1 = self.vae.encoder(x)[0]
+                    _, _, _, z2 = self.vae.decoder(z1, x2)[0]
+                    z1_list.append(z1)
+                    z2_list.append(z2)
+                else:
+                    x1, x2, x3, _ = self.vae.encoder(x)[0]
                 pred = self.model(x1, x2, x3)
 
             loss = self.model.criterion(pred, y)
@@ -325,7 +332,13 @@ class ReadoutTrainer(BaseTrainer):
         true = torch.cat(true_list)
         pred, true = tuple(map(to_np, (pred, true)))
 
-        return loss, pred, true
+        if compute_latents:
+            z1 = torch.cat(z1_list)
+            z2 = torch.cat(z2_list)
+            z1, z2 = tuple(map(to_np, (z1, z2)))
+            return loss, pred, true, (z1, z2)
+        else:
+            return loss, pred, true
 
     def setup_data(self):
         dl_train, dl_valid, dl_test = create_readout_dataset(self.config, self.train_config)

@@ -41,6 +41,8 @@ class VAE(nn.Module):
         assert 0.0 <= new_beta <= 1.0, "beta must be in [0, 1] interval"
         self.beta = new_beta
 
+    # TODO: replace all logvar ---> 0.5 logvar
+    # TODO: because: logvar = log \Sigma^2
     def _compute_loss(self, recon, tgt, mu_x, mu_xz, logvar_z, logvar_x, logvar_xz):
         kl_x = 0.5 * torch.sum(
             torch.pow(mu_x, 2) + torch.exp(logvar_x) - logvar_x - 1
@@ -124,22 +126,21 @@ class Decoder(nn.Module):
 
         return (y1, y2, y3, z2), (mu_z, logvar_z), (mu_xz, logvar_xz)
 
-    def generate(self, num_samples=None, z1=None):
-        self.eval()
-
-        if num_samples is None:
-            num_samples = 16
-
+    def generate(self, device: torch.device, num_samples: int = 40, z1=None, z2=None):
         if z1 is None:
             z1 = torch.randn((num_samples, self.z_dim))
+        z1 = z1.to(device)
 
         y1 = z1.view(-1, self.z_dim, 1, 1, 1)
         y1 = self.expand1(y1)
         y1 = self.layer1(y1)
         y2 = self.proj1(y1)
 
-        mu_z, logvar_z = self.condition_z(y2).squeeze().chunk(2, dim=-1)
-        z2 = reparametrize(mu_z, logvar_z)
+        if z2 is None:
+            mu_z, logvar_z = self.condition_z(y2).squeeze().chunk(2, dim=-1)
+            z2 = reparametrize(mu_z, logvar_z)
+        z2 = z2.to(device)
+
         res = z2.view(-1, self.z_dim, 1, 1, 1)
         res = self.expand2(res)
 
@@ -147,7 +148,7 @@ class Decoder(nn.Module):
         y2 = self.layer2(y2)
         y3 = self.proj2(y2)
 
-        return z1, z2, res, y3
+        return y3, (z1, z2)
 
     def _make_layer(self, planes, blocks, stride=1):
         downsample = None

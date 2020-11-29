@@ -81,15 +81,19 @@ def mk_psth_plots(
 
         figs.append(f)
         sups.append(sup)
-        axes.append(ax_arr)
-    axes = np.concatenate(axes).T
+        axes.append(np.expand_dims(ax_arr, axis=0))
+    axes = np.concatenate(axes)
 
     # TODO: fix this so the cases are automatically handled
     save_fig(figs, sups, save_file, display, multi=True)
     return figs, axes, sups
 
 
-def plot_vel_field(data, fig_size=None, scale=None, save_file=None, estimate_center=False):
+def animate_vel_field():
+    pass
+
+
+def plot_vel_field(data, fig_size=None, scale=None, save_file=None, dpi=100, estimate_center=False):
     # TODO: fix this using ax_arr stuff
     if torch.is_tensor(data):
         data = to_np(dc(data))
@@ -112,7 +116,7 @@ def plot_vel_field(data, fig_size=None, scale=None, save_file=None, estimate_cen
         uu, vv = data_to_plot[0, ..., i], data_to_plot[1, ..., i]
         cc = np.sqrt(np.square(uu) + np.square(vv))
 
-        plt.figure(figsize=fig_size)
+        plt.figure(figsize=fig_size, dpi=dpi)
         plt.subplot(num, 3, 3 * i + 1)
         plt.imshow(uu, vmin=-vminmax, vmax=vminmax, cmap='bwr')
         plt.colorbar()
@@ -128,7 +132,7 @@ def plot_vel_field(data, fig_size=None, scale=None, save_file=None, estimate_cen
         plt.subplot(num, 3, 3 * i + 3)
         plt.quiver(xx, yy, uu, vv, cc, alpha=1, cmap='PuBu', scale=scale)
         plt.colorbar()
-        plt.scatter(xx, yy, s=0.005)
+        plt.scatter(xx, yy, s=0.001, color='bisque')
         plt.xlim(-1, grd)
         plt.ylim(-1, grd)
         plt.axis('image')
@@ -140,7 +144,7 @@ def plot_vel_field(data, fig_size=None, scale=None, save_file=None, estimate_cen
 
     if save_file is not None:
         plt.savefig(save_file, facecolor='white')
-        plt.close()
+        plt.show()
     else:
         plt.show()
 

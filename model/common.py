@@ -18,7 +18,7 @@ def add_wn(m: nn.Module):
         return m
 
 
-def get_init_fn(init_range: float):
+def get_init_fn(init_range: float = 0.01):
     def init_weights(m: nn.Module):
         if isinstance(m, (nn.Conv3d, nn.ConvTranspose3d)):
             nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')

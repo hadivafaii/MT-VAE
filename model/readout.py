@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.nn.utils import weight_norm
 
-from .common import get_init_fn, Permute
+from .common import get_init_fn, Permute, Swish
 from .configuration import ReadoutConfig
 from .model_utils import print_num_params
 
@@ -13,11 +13,12 @@ class Readout(nn.Module):
 
         self.config = config
 
+        _temp_dims = [11, 6, 3]
         _spat_dims = [15, 8, 4]
         spatiotemporal = [
             nn.Sequential(
                 nn.Dropout3d(p=config.dropout, inplace=True),
-                nn.Linear(in_features=config.time_lags // 2**i,
+                nn.Linear(in_features=_temp_dims[i],    # config.time_lags // 2**i,
                           out_features=config.nb_tk[i], bias=False,),
                 Permute(dims=(0, 1, -1, 2, 3)),
                 nn.Flatten(start_dim=3),
@@ -28,12 +29,11 @@ class Readout(nn.Module):
             for i in config.include_lvls
         ]
         self.spatiotemporal = nn.ModuleList(spatiotemporal)
+        self.relu = nn.ReLU(inplace=True)
 
         # total filters to pool from
         nb_filters = sum(config.nb_tk[i] * config.nb_sk[i] * config.core_dim * 2**i for i in config.include_lvls)
-
         self.layer = nn.Linear(nb_filters, len(config.useful_cells[config.expt]), bias=True)
-        self.relu = nn.ReLU(inplace=True)
         self.softplus = nn.Softplus()
         self.criterion = nn.PoissonNLLLoss(log_input=False, reduction="sum")
 
@@ -48,6 +48,49 @@ class Readout(nn.Module):
         x = self.layer(x)
         x = self.softplus(x)
         return x
+
+
+class ConvReadout(nn.Module):
+    def __init__(self, config: ReadoutConfig, verbose=False):
+        super(ConvReadout, self).__init__()
+
+        self.config = config
+
+        _temp_dims = [11, 6, 3]
+        _spat_dims = [15, 8, 4]
+        spatiotemporal = [
+            nn.Sequential(
+                weight_norm(nn.Conv3d(
+                    in_channels=config.core_dim * 2**i,
+                    out_channels=config.nb_units[i],
+                    kernel_size=config.kernel_sizes[i],
+                    groups=config.groups[i],)),
+                nn.ReLU(inplace=True),
+                nn.AdaptiveAvgPool3d(1),
+                nn.Flatten(),
+            )
+            for i in config.include_lvls
+        ]
+        self.spatiotemporal = nn.ModuleList(spatiotemporal)
+        self.dropout = nn.Dropout(config.dropout)
+
+        self.layer = nn.Linear(sum(config.nb_units), len(config.useful_cells[config.expt]), bias=True)
+        self.softplus = nn.Softplus()
+        self.criterion = nn.PoissonNLLLoss(log_input=False, reduction="sum")
+
+        self.apply(get_init_fn(config.init_range))
+        if verbose:
+            print_num_params(self)
+
+    def forward(self, *args):
+        x = (self.spatiotemporal[i](args[lvl]) for i, lvl in enumerate(self.config.include_lvls))
+        x = torch.cat(list(x), dim=-1)
+        x = self.dropout(x)
+        # x = self.relu(x)
+        x = self.layer(x)
+        x = self.softplus(x)
+        return x
+
 
 
 class SingleCellReadout(nn.Module):

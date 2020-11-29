@@ -215,10 +215,13 @@ def r2_score(pred: np.ndarray, true: np.ndarray, axis: int = 0, clean: bool = Tr
 
 
 def get_null_adj_nll(pred: np.ndarray, true: np.ndarray, axis: int = 0):
+
     if not isinstance(pred, np.ndarray):
         pred = np.array(pred)
     if not isinstance(true, np.ndarray):
         true = np.array(true)
+
+    assert not (pred < 0).sum(), "predicted firing rate must be non-negative"
 
     nll = _get_nll(pred, true, axis)
 

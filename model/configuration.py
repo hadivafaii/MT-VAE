@@ -1,5 +1,4 @@
 import os
-import h5py
 import numpy as np
 import pandas as pd
 from os.path import join as pjoin
@@ -74,7 +73,8 @@ class Config:
             self.readout_h_file = readout_h_file
 
         if useful_cells is None:
-            self.useful_cells = load_cellinfo(self.base_dir)
+            raise RuntimeError
+            # self.useful_cells = load_cellinfo(self.base_dir)
         else:
             self.useful_cells = useful_cells
 
@@ -82,6 +82,8 @@ class Config:
 class TrainConfig:
     def __init__(self,
                  lr: float = 1e-2,
+                 beta1: float = 0.9,
+                 beta2: float = 0.999,
                  batch_size: int = 64,
                  weight_decay: float = 1e-1,
 
@@ -101,6 +103,8 @@ class TrainConfig:
                  runs_dir: str = 'Documents/MT/runs',):
 
         self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
         self.batch_size = batch_size
         self.weight_decay = weight_decay
 
@@ -172,7 +176,7 @@ class VAEConfig:
 
 class BaseConfig(object):
     def __init__(self,
-                 time_lags: int = 12,
+                 time_lags: int = 11,
                  init_range: float = 0.05,
                  base_dir: str = 'Documents/MT',
                  temporal_res: int = 25,
@@ -180,6 +184,7 @@ class BaseConfig(object):
                  h_file: str = None,
                  useful_cells: Dict[str, list] = None,
                  ):
+        super(BaseConfig, self).__init__()
 
         self.time_lags = time_lags
         self.init_range = init_range
@@ -231,6 +236,9 @@ class ReadoutConfig(BaseConfig):
                  expt: str,
                  core_dim: int = 64,
                  dropout: float = 0.0,
+                 groups: List[int] = None,
+                 nb_units: List[int] = None,
+                 kernel_sizes: List[Union[int, list]] = None,
                  include_lvls: List[int] = None,
                  nb_sk: List[int] = None,
                  nb_tk: List[int] = None,
@@ -241,20 +249,23 @@ class ReadoutConfig(BaseConfig):
         self.expt = expt
         self.core_dim = core_dim
         self.dropout = dropout
+
+        self.groups = [32, 16, 4] if groups is None else groups
+        self.nb_units = [128, 64, 32] if nb_units is None else nb_units
+        self.kernel_sizes = [3 * [5], 3 * [4], 3 * [2]] if kernel_sizes is None else kernel_sizes
         self.include_lvls = [0, 1, 2] if include_lvls is None else include_lvls
-        self.nb_sk = [16, 8, 4] if nb_sk is None else nb_sk
+        assert len(self.include_lvls) == len(self.kernel_sizes) == len(self.groups)
+
+        self.nb_sk = [8, 4, 4] if nb_sk is None else nb_sk
         self.nb_tk = [2, 2, 1] if nb_tk is None else nb_tk
-        assert len(self.include_lvls) == len(self.nb_sk) == len(self.nb_tk)
+        # assert len(self.include_lvls) == len(self.nb_sk) == len(self.nb_tk)
 
 
 class FFConfig(BaseConfig):
     def __init__(self,
                  expt: str,
-                 time_lags: int = 12,
                  **kwargs,
                  ):
         super(FFConfig, self).__init__(**kwargs)
 
-        # readout config
         self.expt = expt
-        self.time_lags = time_lags

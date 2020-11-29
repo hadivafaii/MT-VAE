@@ -24,13 +24,16 @@ class GLM(nn.Module):
         self.config = config
 
         spat_dim = 15
-        self.kernel = weight_norm(nn.Linear(
-            in_features=config.time_lags * 2 * spat_dim ** 2,
-            out_features=1,
-            bias=False,
-        ))
-        self.flatten = nn.Flatten()
-        self.softplus = nn.Softplus()
+        self.spatiotemporal = nn.ModuleList([
+            nn.Sequential(
+                nn.Flatten(),
+                weight_norm(nn.Linear(
+                    in_features=config.time_lags * 2 * spat_dim ** 2,
+                    out_features=1,
+                    bias=True,)),
+                nn.Softplus(),)
+            for _ in range(len(config.useful_cells[config.expt]))
+        ])
         self.criterion = nn.PoissonNLLLoss(log_input=False, reduction="sum")
 
         self.apply(get_init_fn(self.config.init_range))
@@ -38,10 +41,8 @@ class GLM(nn.Module):
             print_num_params(self)
 
     def forward(self, x):
-        x = self.flatten(x)
-        x = self.kernel(x)
-        y = self.softplus(x)
-        return y
+        y = (layer(x) for layer in self.spatiotemporal)
+        return torch.cat(list(y), dim=-1)
 
 
 class DSGLM(nn.Module):
