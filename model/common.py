@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.nn.utils import spectral_norm, weight_norm
 from typing import Tuple, Union
 
@@ -16,6 +17,37 @@ def add_wn(m: nn.Module):
         return weight_norm(m)
     else:
         return m
+
+
+class LearnedSwish(nn.Module):
+    def __init__(self, slope: float = 1.0):
+        super().__init__()
+        self.slope = torch.nn.Parameter(torch.ones(1, dtype=torch.float) * slope)
+
+    def forward(self, x):
+        return self.slope * x * torch.sigmoid(x)
+
+
+class LearnedSoftPlus(torch.nn.Module):
+    def __init__(self, beta: float = 1.0, threshold: float = 20):
+        super().__init__()
+
+        self.log_beta = torch.nn.Parameter(torch.tensor(float(beta)).log())
+        self.threshold = threshold
+
+    def forward(self, x):
+        beta = self.log_beta.exp()
+        beta_x = beta * x
+        return torch.where(beta_x < self.threshold, torch.log1p(beta_x.exp()) / beta, x)
+
+
+class PosLinear(nn.Linear):
+    def __init__(self, in_features: int, out_features: int, bias: bool = True):
+        super(PosLinear, self).__init__(in_features=in_features, out_features=out_features, bias=bias)
+
+    def forward(self, x):
+        pos_weight = F.relu(self.weight)
+        return F.linear(x, pos_weight, self.bias)
 
 
 def get_init_fn(init_range: float = 0.01):

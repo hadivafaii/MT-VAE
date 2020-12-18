@@ -177,7 +177,7 @@ class VAEConfig:
 class BaseConfig(object):
     def __init__(self,
                  time_lags: int = 11,
-                 init_range: float = 0.05,
+                 init_range: float = 0.01,
                  base_dir: str = 'Documents/MT',
                  temporal_res: int = 25,
                  grid_size: int = 15,

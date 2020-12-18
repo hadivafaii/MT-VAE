@@ -3,13 +3,66 @@ import torch
 import numpy as np
 from typing import Dict
 from copy import deepcopy as dc
+from tqdm.notebook import tqdm
 from .generic_utils import to_np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import FigureCanvasPdf, PdfPages
 from matplotlib.patches import FancyBboxPatch, BoxStyle
 from matplotlib.collections import PatchCollection
 import seaborn as sns
-sns.set_style('white')
+
+
+def mk_2d_tuning_curve(
+        tuning_curve: np.ndarray,
+        lim: float = 5.0,
+        save_file: str = None,
+        display: bool = True,
+        figsize=(32, 27),
+        dpi=100,):
+
+    num_latents = tuning_curve.shape[0]
+    num = int(np.sqrt(tuning_curve.shape[-1]))
+    xx = np.linspace(-lim, lim, num)
+    yy = np.linspace(-lim, lim, num)
+
+    sns.set_style('white')
+    fig, axes = plt.subplots(16, 16, figsize=figsize, dpi=dpi, sharex='all', sharey='all')
+
+    ticks = [0, num // 2 - 1, num - 1]
+    xtick_labels = np.round(xx[[0, num // 2 - 1, num - 1]], decimals=1)
+    ytick_labels = np.round(yy[[0, num // 2 - 1, num - 1]], decimals=1)
+
+    fr_min = np.min(tuning_curve)
+    fr_max = np.max(tuning_curve)
+
+    for dim1 in tqdm(range(num_latents)):
+        if dim1 == 0:
+            for i in range(num_latents):
+                axes[dim1, i].set_title('z idx = {:d}'.format(i))
+        remaining = list(range(num_latents))
+        remaining.remove(dim1)
+        for dim2 in tqdm(remaining, leave=False):
+            im = axes[dim1, dim2].imshow(
+                X=tuning_curve[dim1, dim2].reshape(num, num).T,
+                cmap='gist_ncar',
+                vmin=fr_min,
+                vmax=fr_max,
+                interpolation='bilinear',
+            )
+
+    axes[-1, 0].set_xticks(ticks)
+    axes[-1, 0].set_xticklabels(xtick_labels)
+    axes[-1, 0].set_yticks(ticks)
+    axes[-1, 0].set_yticklabels(ytick_labels)
+
+    _ = fig.colorbar(im, ax=axes.ravel().tolist(), aspect=80, pad=0.02)
+
+    msg = "2D tuning curves. {:s}\nmin firing rate:  {:.2f}  /  max firing rate:  {:.2f}"
+    msg = msg.format(save_file, fr_min, fr_max)
+    sup = fig.suptitle(msg, fontsize=30, y=0.95)
+
+    save_fig(fig, sup, save_file, display)
+    return fig, axes
 
 
 def mk_psth_plots(

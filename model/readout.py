@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.nn.utils import weight_norm
 
-from .common import get_init_fn, Permute, Swish
+from .common import get_init_fn, Permute, LearnedSoftPlus, LearnedSwish
 from .configuration import ReadoutConfig
 from .model_utils import print_num_params
 
@@ -19,22 +19,29 @@ class Readout(nn.Module):
             nn.Sequential(
                 nn.Dropout3d(p=config.dropout, inplace=True),
                 nn.Linear(in_features=_temp_dims[i],    # config.time_lags // 2**i,
-                          out_features=config.nb_tk[i], bias=False,),
+                          out_features=config.nb_tk[i], bias=True,),
                 Permute(dims=(0, 1, -1, 2, 3)),
                 nn.Flatten(start_dim=3),
                 weight_norm(nn.Linear(
                     in_features=_spat_dims[i] ** 2,
-                    out_features=config.nb_sk[i], bias=False,)),
+                    out_features=config.nb_sk[i], bias=True,)),
                 nn.Flatten(),)
             for i in config.include_lvls
         ]
         self.spatiotemporal = nn.ModuleList(spatiotemporal)
-        self.relu = nn.ReLU(inplace=True)
+        self.activation = LearnedSwish(slope=1.0)
 
         # total filters to pool from
-        nb_filters = sum(config.nb_tk[i] * config.nb_sk[i] * config.core_dim * 2**i for i in config.include_lvls)
-        self.layer = nn.Linear(nb_filters, len(config.useful_cells[config.expt]), bias=True)
-        self.softplus = nn.Softplus()
+        self.nb_filters = {i: config.nb_tk[i] * config.nb_sk[i] * config.core_dim * 2**i for i in config.include_lvls}
+        # self.register_buffer('mask', self._compute_mask())
+        nf = sum(list(self.nb_filters.values()))
+        nc = len(config.useful_cells[config.expt])
+        layers = []
+        for cc in range(nc):
+            layers += [nn.Sequential(nn.Linear(nf, 1, bias=True), LearnedSoftPlus(beta=1.0))]
+        self.layers = nn.ModuleList(layers)
+        # self.layer = nn.Linear(nb_filters, nb_cells, bias=True)
+        # self.activations = nn.Softplus()
         self.criterion = nn.PoissonNLLLoss(log_input=False, reduction="sum")
 
         self.apply(get_init_fn(config.init_range))
@@ -44,10 +51,22 @@ class Readout(nn.Module):
     def forward(self, *args):
         x = (self.spatiotemporal[i](args[lvl]) for i, lvl in enumerate(self.config.include_lvls))
         x = torch.cat(list(x), dim=-1)
-        x = self.relu(x)
-        x = self.layer(x)
-        x = self.softplus(x)
-        return x
+        x = self.activation(x)
+        # x.mul_(self.mask)
+
+        y = (layer(x) for layer in self.layers)
+        y = torch.cat(list(y), dim=-1)
+        # x = self.layer(x)
+        # x = self.softplus(x)
+        return y
+
+    def _compute_mask(self):
+        mask = []
+        for i, nf in self.nb_filters.items():
+            nb_exc = nf // 2
+            nb_inh = nf - nb_exc
+            mask.extend([1.] * nb_exc + [-1.] * nb_inh)
+        return torch.tensor(mask, dtype=torch.float)
 
 
 class ConvReadout(nn.Module):

@@ -1,6 +1,7 @@
 import os
 import yaml
 import numpy as np
+from typing import Tuple
 from copy import deepcopy as dc
 from prettytable import PrettyTable
 from os.path import join as pjoin
@@ -205,6 +206,24 @@ def print_num_params(module: nn.Module):
             else:
                 t.add_row([name, "{}".format(total_params)])
     print(t, '\n\n')
+
+
+def add_weight_decay(model, weight_decay: float = 1e-1, skip_keywords: Tuple[str, ...] = ('bias',)):
+    decay = []
+    no_decay = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if len(param.shape) <= 1 or any(k in name for k in skip_keywords):
+            no_decay.append(param)
+        else:
+            decay.append(param)
+
+    param_groups = [
+        {'params': no_decay, 'weight_decay': 0.},
+        {'params': decay, 'weight_decay': weight_decay},
+    ]
+    return param_groups
 
 
 def r2_score(pred: np.ndarray, true: np.ndarray, axis: int = 0, clean: bool = True):

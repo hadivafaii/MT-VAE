@@ -17,7 +17,7 @@ from .vae import VAE
 from .readout import Readout
 from .configuration import TrainConfig
 from .dataset import create_readout_dataset
-from .model_utils import save_model, get_null_adj_nll
+from .model_utils import save_model, get_null_adj_nll, add_weight_decay
 from utils.generic_utils import to_np, now
 
 
@@ -107,12 +107,14 @@ class BaseTrainer(object):
             self.setup_optim()
 
     def setup_optim(self):
+        params = add_weight_decay(self.model, self.train_config.weight_decay)
         self.optim = AdamW(
-            filter(lambda p: p.requires_grad, self.model.parameters()),
+            params=params,
             lr=self.train_config.lr,
             weight_decay=self.train_config.weight_decay,
             betas=(self.train_config.beta1, self.train_config.beta2),
         )
+
         if self.train_config.scheduler_type == 'cosine':
             self.optim_schedule = CosineAnnealingLR(
                 self.optim,
